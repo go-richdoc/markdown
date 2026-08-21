@@ -5,9 +5,12 @@
 // [github.com/go-richdoc/richdoc] document model.
 //
 // [Parse] turns CommonMark source (with the GFM table and strikethrough
-// extensions enabled) into a [richdoc.Document]. Parsing delegates to the
-// reference Go Markdown library, goldmark, and walks its AST to build the
-// richdoc tree, so the package never hand-rolls a CommonMark parser.
+// extensions, PHP-Markdown-Extra footnotes and explicit heading anchors
+// enabled) into a [richdoc.Document]. Parsing delegates to the reference Go
+// Markdown library, goldmark, and walks its AST to build the richdoc tree, so
+// the package never hand-rolls a CommonMark parser. Footnotes come from
+// goldmark's own extension.Footnote; heading anchors from
+// parser.WithHeadingAttribute (explicit "{#id}"), not auto-generated ids.
 //
 // [Write] renders a [richdoc.Document] back to clean CommonMark. The pair aims
 // for a stable round-trip: Write(Parse(src)) is semantically equivalent to

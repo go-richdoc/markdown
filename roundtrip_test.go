@@ -54,6 +54,14 @@ var corpus = map[string]string{
 
 	"escapes": "Literal chars: a\\*b, c\\_d, e\\`f, g\\[h\\], i\\~j and k\\<l.\n",
 
+	"footnotes": "A claim needing support.[^1] And a second one.[^2]\n\n[^1]: The first note body.\n\n[^2]: The second note body.\n",
+
+	"footnote-multiblock": "See the note.[^1]\n\n[^1]: First paragraph of the note.\n\n    Second paragraph of the note.\n",
+
+	"heading-anchors": "# Plain Heading\n\n## Anchored Heading {#sec-intro}\n\nBody text under the section.\n",
+
+	"cross-references": "See the [introduction](#sec-intro) and also the [summary](#sec-end).\n",
+
 	"empty": "",
 }
 

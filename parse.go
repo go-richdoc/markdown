@@ -9,35 +9,79 @@ import (
 	gast "github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	extast "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 )
 
 // md is the shared goldmark instance: CommonMark plus the GFM table and
-// strikethrough extensions. It is safe for concurrent use.
+// strikethrough extensions, the PHP-Markdown-Extra footnote extension
+// (`[^id]` references with `[^id]: …` definitions) and explicit heading
+// attributes (`## Title {#id}`). It is safe for concurrent use.
+//
+// Only WithHeadingAttribute is enabled, not WithAutoHeadingID: the former reads
+// back the ids an author wrote and leaves every other heading anchorless, which
+// round-trips faithfully; auto ids would fabricate an anchor on every heading
+// and Write would then stamp a `{#id}` the source never had.
 var md = goldmark.New(
 	goldmark.WithExtensions(
 		extension.Table,
 		extension.Strikethrough,
+		extension.Footnote,
+	),
+	goldmark.WithParserOptions(
+		parser.WithHeadingAttribute(),
 	),
 )
 
-// Parse converts CommonMark source (with GFM tables and strikethrough) into a
-// [richdoc.Document]. goldmark's parser never reports an error, so the
-// returned error is always nil; it is kept in the signature for symmetry with
-// [Write] and for forward compatibility.
+// Parse converts CommonMark source (with GFM tables and strikethrough, PHP
+// Markdown Extra footnotes and explicit heading anchors) into a
+// [richdoc.Document]. goldmark's parser never reports an error, so the returned
+// error is always nil; it is kept in the signature for symmetry with [Write]
+// and for forward compatibility.
 func Parse(src []byte) (*richdoc.Document, error) {
 	root := md.Parser().Parse(text.NewReader(src))
-	return &richdoc.Document{Blocks: convertFlow(root, src)}, nil
+	c := &converter{src: src, notes: collectFootnotes(root)}
+	return &richdoc.Document{Blocks: c.convertFlow(root)}, nil
+}
+
+// converter carries the parse-wide state (the source bytes and the resolved
+// footnote definitions) through the recursive conversion.
+type converter struct {
+	src   []byte
+	notes map[int]*extast.Footnote
+}
+
+// collectFootnotes indexes the footnote definitions goldmark gathers into the
+// trailing [extast.FootnoteList] by their resolved Index, so a [^id] reference
+// (an [extast.FootnoteLink], which carries the same Index) can be turned into an
+// inline [richdoc.Footnote] holding the note body at the reference site. The map
+// is nil when the document has no footnotes.
+func collectFootnotes(root gast.Node) map[int]*extast.Footnote {
+	var notes map[int]*extast.Footnote
+	for c := root.FirstChild(); c != nil; c = c.NextSibling() {
+		list, ok := c.(*extast.FootnoteList)
+		if !ok {
+			continue
+		}
+		for f := list.FirstChild(); f != nil; f = f.NextSibling() {
+			fn := f.(*extast.Footnote)
+			if notes == nil {
+				notes = make(map[int]*extast.Footnote)
+			}
+			notes[fn.Index] = fn
+		}
+	}
+	return notes
 }
 
 // convertFlow converts every block-level child of n into richdoc blocks,
 // dropping children that carry no representable content (for example link
 // reference definitions).
-func convertFlow(n gast.Node, src []byte) []richdoc.Block {
+func (c *converter) convertFlow(n gast.Node) []richdoc.Block {
 	var blocks []richdoc.Block
-	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-		if b := convertBlock(c, src); b != nil {
+	for ch := n.FirstChild(); ch != nil; ch = ch.NextSibling() {
+		if b := c.convertBlock(ch); b != nil {
 			blocks = append(blocks, b)
 		}
 	}
@@ -46,45 +90,54 @@ func convertFlow(n gast.Node, src []byte) []richdoc.Block {
 
 // convertBlock maps a single goldmark block node to a richdoc block, or nil
 // when the node has no richdoc representation (link reference definitions,
-// which goldmark keeps in the tree but renders invisibly).
-func convertBlock(n gast.Node, src []byte) richdoc.Block {
+// which goldmark keeps in the tree but renders invisibly, and the footnote
+// list, whose bodies are inlined at their reference sites).
+func (c *converter) convertBlock(n gast.Node) richdoc.Block {
 	switch b := n.(type) {
 	case *gast.Heading:
-		return richdoc.Heading{Level: b.Level, Inlines: convertInlines(b, src)}
+		h := richdoc.Heading{Level: b.Level, Inlines: c.convertInlines(b)}
+		if id, ok := b.AttributeString("id"); ok {
+			h.ID = string(id.([]byte))
+		}
+		return h
 	case *gast.Paragraph:
-		return richdoc.Paragraph{Inlines: convertInlines(b, src)}
+		return richdoc.Paragraph{Inlines: c.convertInlines(b)}
 	case *gast.TextBlock:
 		// TextBlock is goldmark's paragraph-without-spacing, used inside tight
 		// list items and table cells. It maps onto a plain paragraph.
-		return richdoc.Paragraph{Inlines: convertInlines(b, src)}
+		return richdoc.Paragraph{Inlines: c.convertInlines(b)}
 	case *gast.FencedCodeBlock:
-		return richdoc.CodeBlock{Language: string(b.Language(src)), Text: string(b.Text(src))}
+		return richdoc.CodeBlock{Language: string(b.Language(c.src)), Text: string(b.Text(c.src))}
 	case *gast.CodeBlock:
-		return richdoc.CodeBlock{Text: string(b.Text(src))}
+		return richdoc.CodeBlock{Text: string(b.Text(c.src))}
 	case *gast.Blockquote:
-		return richdoc.BlockQuote{Blocks: convertFlow(b, src)}
+		return richdoc.BlockQuote{Blocks: c.convertFlow(b)}
 	case *gast.List:
-		return convertList(b, src)
+		return c.convertList(b)
 	case *gast.ThematicBreak:
 		return richdoc.ThematicBreak{}
 	case *gast.HTMLBlock:
-		return richdoc.RawBlock{Format: "html", Text: string(b.Text(src))}
+		return richdoc.RawBlock{Format: "html", Text: string(b.Text(c.src))}
 	case *extast.Table:
-		return convertTable(b, src)
+		return c.convertTable(b)
+	case *extast.FootnoteList:
+		// The definitions are surfaced inline at each reference; the list node
+		// itself, which goldmark appends at document end, carries nothing extra.
+		return nil
 	}
 	return nil
 }
 
 // convertList maps a goldmark list, preserving ordered/tight state and the
 // starting number of ordered lists.
-func convertList(n *gast.List, src []byte) richdoc.List {
+func (c *converter) convertList(n *gast.List) richdoc.List {
 	l := richdoc.List{Ordered: n.IsOrdered(), Start: n.Start, Tight: n.IsTight}
 	if l.Start < 1 {
 		l.Start = 1
 	}
-	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-		if item, ok := c.(*gast.ListItem); ok {
-			l.Items = append(l.Items, richdoc.ListItem{Blocks: convertFlow(item, src)})
+	for ch := n.FirstChild(); ch != nil; ch = ch.NextSibling() {
+		if item, ok := ch.(*gast.ListItem); ok {
+			l.Items = append(l.Items, richdoc.ListItem{Blocks: c.convertFlow(item)})
 		}
 	}
 	return l
@@ -92,25 +145,25 @@ func convertList(n *gast.List, src []byte) richdoc.List {
 
 // convertTable maps a GFM table, its header row and body rows, and per-column
 // alignments.
-func convertTable(n *extast.Table, src []byte) richdoc.Table {
+func (c *converter) convertTable(n *extast.Table) richdoc.Table {
 	t := richdoc.Table{Align: convertAligns(n.Alignments)}
 	for row := n.FirstChild(); row != nil; row = row.NextSibling() {
 		switch row.(type) {
 		case *extast.TableHeader:
-			t.Header = convertRow(row, src)
+			t.Header = c.convertRow(row)
 		case *extast.TableRow:
-			t.Rows = append(t.Rows, convertRow(row, src))
+			t.Rows = append(t.Rows, c.convertRow(row))
 		}
 	}
 	return t
 }
 
 // convertRow converts the cells of a single table row.
-func convertRow(row gast.Node, src []byte) []richdoc.Cell {
+func (c *converter) convertRow(row gast.Node) []richdoc.Cell {
 	var cells []richdoc.Cell
-	for c := row.FirstChild(); c != nil; c = c.NextSibling() {
-		if cell, ok := c.(*extast.TableCell); ok {
-			cells = append(cells, richdoc.Cell{Inlines: convertInlines(cell, src)})
+	for ch := row.FirstChild(); ch != nil; ch = ch.NextSibling() {
+		if cell, ok := ch.(*extast.TableCell); ok {
+			cells = append(cells, richdoc.Cell{Inlines: c.convertInlines(cell)})
 		}
 	}
 	return cells
@@ -141,10 +194,10 @@ func convertAligns(in []extast.Alignment) []richdoc.Alignment {
 // text runs so that goldmark's tokenisation (which may split literal text at,
 // for example, an unmatched backtick) does not leak into the model and unsettle
 // the round-trip.
-func convertInlines(n gast.Node, src []byte) []richdoc.Inline {
+func (c *converter) convertInlines(n gast.Node) []richdoc.Inline {
 	var out []richdoc.Inline
-	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-		for _, in := range convertInline(c, src) {
+	for ch := n.FirstChild(); ch != nil; ch = ch.NextSibling() {
+		for _, in := range c.convertInline(ch) {
 			if t, ok := in.(richdoc.Text); ok && len(out) > 0 {
 				if prev, ok := out[len(out)-1].(richdoc.Text); ok {
 					out[len(out)-1] = richdoc.Text{Value: prev.Value + t.Value}
@@ -159,11 +212,12 @@ func convertInlines(n gast.Node, src []byte) []richdoc.Inline {
 
 // convertInline maps a single goldmark inline node to zero or more richdoc
 // inlines. A text node may yield a trailing [richdoc.LineBreak] for a hard
-// break; an unrepresentable node yields nothing.
-func convertInline(n gast.Node, src []byte) []richdoc.Inline {
+// break; an unrepresentable node (a footnote backlink, for example) yields
+// nothing.
+func (c *converter) convertInline(n gast.Node) []richdoc.Inline {
 	switch i := n.(type) {
 	case *gast.Text:
-		val := decodeText(i.Segment.Value(src))
+		val := decodeText(i.Segment.Value(c.src))
 		if i.SoftLineBreak() {
 			val += "\n"
 		}
@@ -178,36 +232,80 @@ func convertInline(n gast.Node, src []byte) []richdoc.Inline {
 	case *gast.String:
 		return []richdoc.Inline{richdoc.Text{Value: string(i.Value)}}
 	case *gast.CodeSpan:
-		return []richdoc.Inline{richdoc.Code{Value: string(i.Text(src))}}
+		return []richdoc.Inline{richdoc.Code{Value: string(i.Text(c.src))}}
 	case *gast.Emphasis:
 		if i.Level == 2 {
-			return []richdoc.Inline{richdoc.Strong{Inlines: convertInlines(i, src)}}
+			return []richdoc.Inline{richdoc.Strong{Inlines: c.convertInlines(i)}}
 		}
-		return []richdoc.Inline{richdoc.Emph{Inlines: convertInlines(i, src)}}
+		return []richdoc.Inline{richdoc.Emph{Inlines: c.convertInlines(i)}}
 	case *extast.Strikethrough:
-		return []richdoc.Inline{richdoc.Strikethrough{Inlines: convertInlines(i, src)}}
+		return []richdoc.Inline{richdoc.Strikethrough{Inlines: c.convertInlines(i)}}
 	case *gast.Link:
+		if target, ok := internalTarget(i); ok {
+			return []richdoc.Inline{richdoc.CrossRef{
+				Target:  target,
+				Kind:    richdoc.RefLabel,
+				Inlines: c.convertInlines(i),
+			}}
+		}
 		return []richdoc.Inline{richdoc.Link{
 			URL:     string(i.Destination),
 			Title:   string(i.Title),
-			Inlines: convertInlines(i, src),
+			Inlines: c.convertInlines(i),
 		}}
 	case *gast.Image:
 		return []richdoc.Inline{richdoc.Image{
 			URL:   string(i.Destination),
-			Alt:   decodeText(i.Text(src)),
+			Alt:   decodeText(i.Text(c.src)),
 			Title: string(i.Title),
 		}}
 	case *gast.AutoLink:
-		url := string(i.URL(src))
+		url := string(i.URL(c.src))
 		return []richdoc.Inline{richdoc.Link{
 			URL:     url,
-			Inlines: []richdoc.Inline{richdoc.Text{Value: string(i.Label(src))}},
+			Inlines: []richdoc.Inline{richdoc.Text{Value: string(i.Label(c.src))}},
 		}}
 	case *gast.RawHTML:
-		return []richdoc.Inline{richdoc.RawInline{Format: "html", Text: string(i.Segments.Value(src))}}
+		return []richdoc.Inline{richdoc.RawInline{Format: "html", Text: string(i.Segments.Value(c.src))}}
+	case *extast.FootnoteLink:
+		// goldmark only emits a FootnoteLink when a matching definition exists,
+		// so the lookup always resolves; the body is inlined here.
+		return []richdoc.Inline{richdoc.Footnote{Blocks: c.convertFlow(c.notes[i.Index])}}
 	}
 	return nil
+}
+
+// internalTarget reports whether an internal Markdown link (a clean `#fragment`
+// destination with no title) should map to a [richdoc.CrossRef] of kind
+// [richdoc.RefLabel] rather than a plain [richdoc.Link], returning the bare
+// fragment when it does. Anything else — an external URL, a bare `#`, a title,
+// an unclean fragment — stays a Link so the mapping never over-reaches.
+func internalTarget(l *gast.Link) (string, bool) {
+	if len(l.Title) != 0 {
+		return "", false
+	}
+	dest := l.Destination
+	if len(dest) < 2 || dest[0] != '#' {
+		return "", false
+	}
+	frag := dest[1:]
+	if !cleanFragment(frag) {
+		return "", false
+	}
+	return string(frag), true
+}
+
+// cleanFragment reports whether frag is a link fragment simple enough to write
+// back verbatim as `](#frag)` and re-parse identically: no whitespace and none
+// of the characters that would break the link destination or fragment.
+func cleanFragment(frag []byte) bool {
+	for _, b := range frag {
+		switch b {
+		case ' ', '\t', '\n', '\r', '(', ')', '<', '>', '#', '\\', '"':
+			return false
+		}
+	}
+	return true
 }
 
 // decodeText turns a raw Markdown text segment into its literal string,

@@ -162,6 +162,60 @@ func TestParseNodes(t *testing.T) {
 				richdoc.Link{URL: "http://r.example", Inlines: []richdoc.Inline{richdoc.Text{Value: "x"}}},
 			}}},
 		},
+		{
+			// A [^id] reference maps to an inline Footnote holding the body
+			// found in the definition; the trailing definition list is dropped.
+			"footnote",
+			"Text.[^n]\n\n[^n]: The note.\n",
+			[]richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{
+				richdoc.Text{Value: "Text."},
+				richdoc.Footnote{Blocks: []richdoc.Block{
+					richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Text{Value: "The note."}}},
+				}},
+			}}},
+		},
+		{
+			// An explicit heading attribute becomes the Heading.ID.
+			"heading-anchor",
+			"## Intro {#sec-intro}\n",
+			[]richdoc.Block{richdoc.Heading{Level: 2, ID: "sec-intro", Inlines: []richdoc.Inline{richdoc.Text{Value: "Intro"}}}},
+		},
+		{
+			// A clean #fragment link maps to a RefLabel cross-reference.
+			"cross-reference",
+			"See [the intro](#sec-intro).\n",
+			[]richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{
+				richdoc.Text{Value: "See "},
+				richdoc.CrossRef{Target: "sec-intro", Kind: richdoc.RefLabel, Inlines: []richdoc.Inline{richdoc.Text{Value: "the intro"}}},
+				richdoc.Text{Value: "."},
+			}}},
+		},
+		{
+			// A titled #fragment link is left as a plain Link, not a cross-ref.
+			"cross-reference-titled-stays-link",
+			"[x](#sec \"tip\")\n",
+			[]richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{
+				richdoc.Link{URL: "#sec", Title: "tip", Inlines: []richdoc.Inline{richdoc.Text{Value: "x"}}},
+			}}},
+		},
+		{
+			// An angle-bracket destination with a space is an unclean fragment
+			// and stays a plain Link.
+			"cross-reference-unclean-stays-link",
+			"[x](<#a b>)\n",
+			[]richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{
+				richdoc.Link{URL: "#a b", Inlines: []richdoc.Inline{richdoc.Text{Value: "x"}}},
+			}}},
+		},
+		{
+			// A bare "#" destination is too short to be a fragment and stays a
+			// plain Link.
+			"cross-reference-bare-hash-stays-link",
+			"[x](#)\n",
+			[]richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{
+				richdoc.Link{URL: "#", Inlines: []richdoc.Inline{richdoc.Text{Value: "x"}}},
+			}}},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -353,6 +407,52 @@ func TestWriteSyntax(t *testing.T) {
 			"| a |  |  |\n| :--- | :---: | ---: |\n| 1 |  |  |\n", false,
 		},
 		{
+			"heading-with-id",
+			richdoc.New().Add(richdoc.Heading{Level: 2, ID: "sec-intro", Inlines: []richdoc.Inline{richdoc.Txt("Intro")}}).Doc(),
+			"## Intro {#sec-intro}\n", false,
+		},
+		{
+			"footnote",
+			richdoc.New().P(richdoc.Txt("x"), richdoc.Note(richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("the body")}})).Doc(),
+			"x[^1]\n\n[^1]: the body\n", false,
+		},
+		{
+			"footnote-multiblock",
+			richdoc.New().P(richdoc.Txt("x"), richdoc.Note(
+				richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("first")}},
+				richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("second")}},
+			)).Doc(),
+			"x[^1]\n\n[^1]: first\n\n    second\n", false,
+		},
+		{
+			"two-footnotes-numbered-in-order",
+			richdoc.New().P(
+				richdoc.Txt("a"), richdoc.Note(richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("one")}}),
+				richdoc.Txt("b"), richdoc.Note(richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("two")}}),
+			).Doc(),
+			"a[^1]b[^2]\n\n[^1]: one\n\n[^2]: two\n", false,
+		},
+		{
+			"cross-reference-label",
+			richdoc.New().P(richdoc.Ref("sec-intro", richdoc.Txt("the intro"))).Doc(),
+			"[the intro](#sec-intro)\n", false,
+		},
+		{
+			"cross-reference-label-empty-uses-target",
+			richdoc.New().P(richdoc.Ref("sec-intro")).Doc(),
+			"[sec-intro](#sec-intro)\n", false,
+		},
+		{
+			"cross-reference-citation",
+			richdoc.New().P(richdoc.Cite("knuth1984", richdoc.Txt("Knuth"))).Doc(),
+			"[@knuth1984]\n", false,
+		},
+		{
+			"anchor-renders-inlines-only",
+			richdoc.New().P(richdoc.Txt("before "), richdoc.Mark("here", richdoc.Txt("target")), richdoc.Txt(" after")).Doc(),
+			"before target after\n", false,
+		},
+		{
 			"table-ragged-and-wide-align",
 			// Header has 1 column, a row has 3 cells, alignment has 2 entries:
 			// the width is the maximum of the three.
@@ -408,7 +508,8 @@ func TestConvertAlignsNil(t *testing.T) {
 // TestConvertInlineString covers the ast.String branch, which core CommonMark
 // parsing does not exercise but extensions can.
 func TestConvertInlineString(t *testing.T) {
-	got := convertInline(gast.NewString([]byte("lit")), []byte("lit"))
+	c := &converter{src: []byte("lit")}
+	got := c.convertInline(gast.NewString([]byte("lit")))
 	want := []richdoc.Inline{richdoc.Text{Value: "lit"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("convertInline(String) = %#v, want %#v", got, want)
@@ -418,7 +519,8 @@ func TestConvertInlineString(t *testing.T) {
 // TestConvertInlineUnknown covers the fallthrough for an inline node type the
 // mapper does not represent (here a table cell node passed in inline position).
 func TestConvertInlineUnknown(t *testing.T) {
-	if got := convertInline(extast.NewTableCell(), nil); got != nil {
+	c := &converter{}
+	if got := c.convertInline(extast.NewTableCell()); got != nil {
 		t.Errorf("convertInline(unknown) = %#v, want nil", got)
 	}
 }
