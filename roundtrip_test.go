@@ -5,18 +5,26 @@ package markdown
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/go-richdoc/richdoc"
 )
 
 // corpus holds representative Markdown documents exercising every block and
 // inline construct the converter handles. Each must survive a round-trip:
 // Parse -> Write -> Parse reproduces the same richdoc tree, up to the
 // normalisation the writer performs (emphasis markers to '*', list markers to
-// '-'/'1.', setext headings to ATX, autolinks to inline links).
+// '-'/'1.', setext headings to ATX, autolinks to inline links, and a soft
+// line break inside a block flattened to a space — see escapeText).
 var corpus = map[string]string{
 	"headings-atx": "# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n",
 
 	"headings-setext": "Title\n=====\n\nSubtitle\n--------\n",
+
+	"headings-setext-multiline": "Foo\nBar\n---\n",
+
+	"paragraph-lazy-continuation-not-thematic-break": "Foo\n    ---\n",
 
 	"paragraphs-and-breaks": "First paragraph with a soft\nline break inside it.\n\nSecond paragraph with a hard  \nline break inside it.\n",
 
@@ -80,10 +88,102 @@ func TestRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("re-Parse: %v", err)
 			}
-			if !reflect.DeepEqual(d1, d2) {
-				t.Errorf("round-trip changed the tree\n--- rewritten source ---\n%s\n--- d1 ---\n%#v\n--- d2 ---\n%#v", out, d1, d2)
+			want := normalizeSoftBreaks(d1)
+			if !reflect.DeepEqual(want, d2) {
+				t.Errorf("round-trip changed the tree\n--- rewritten source ---\n%s\n--- d1 (soft-break normalized) ---\n%#v\n--- d2 ---\n%#v", out, want, d2)
 			}
 		})
+	}
+}
+
+// normalizeSoftBreaks returns a copy of d with every soft-line-break newline
+// Parse preserves in a richdoc.Text.Value flattened to a single space — the
+// same normalisation Write's escapeText applies, so d1 compares equal to the
+// tree Write -> Parse actually produces (see escapeText's own doc comment for
+// why the newline can't survive unchanged).
+func normalizeSoftBreaks(d *richdoc.Document) *richdoc.Document {
+	out := richdoc.Clone(d)
+	out.Blocks = normalizeBlocks(out.Blocks)
+	return out
+}
+
+func normalizeBlocks(blocks []richdoc.Block) []richdoc.Block {
+	for i, b := range blocks {
+		blocks[i] = normalizeBlock(b)
+	}
+	return blocks
+}
+
+func normalizeBlock(b richdoc.Block) richdoc.Block {
+	switch n := b.(type) {
+	case richdoc.Heading:
+		n.Inlines = normalizeInlines(n.Inlines)
+		return n
+	case richdoc.Paragraph:
+		n.Inlines = normalizeInlines(n.Inlines)
+		return n
+	case richdoc.List:
+		for i, it := range n.Items {
+			it.Blocks = normalizeBlocks(it.Blocks)
+			n.Items[i] = it
+		}
+		return n
+	case richdoc.BlockQuote:
+		n.Blocks = normalizeBlocks(n.Blocks)
+		return n
+	case richdoc.Table:
+		normalizeCells(n.Header)
+		for _, row := range n.Rows {
+			normalizeCells(row)
+		}
+		return n
+	default:
+		return b
+	}
+}
+
+func normalizeCells(cells []richdoc.Cell) {
+	for i, c := range cells {
+		c.Inlines = normalizeInlines(c.Inlines)
+		cells[i] = c
+	}
+}
+
+func normalizeInlines(inlines []richdoc.Inline) []richdoc.Inline {
+	for i, in := range inlines {
+		inlines[i] = normalizeInline(in)
+	}
+	return inlines
+}
+
+func normalizeInline(in richdoc.Inline) richdoc.Inline {
+	switch n := in.(type) {
+	case richdoc.Text:
+		n.Value = strings.ReplaceAll(n.Value, "\n", " ")
+		return n
+	case richdoc.Emph:
+		n.Inlines = normalizeInlines(n.Inlines)
+		return n
+	case richdoc.Strong:
+		n.Inlines = normalizeInlines(n.Inlines)
+		return n
+	case richdoc.Strikethrough:
+		n.Inlines = normalizeInlines(n.Inlines)
+		return n
+	case richdoc.Link:
+		n.Inlines = normalizeInlines(n.Inlines)
+		return n
+	case richdoc.Footnote:
+		n.Blocks = normalizeBlocks(n.Blocks)
+		return n
+	case richdoc.Anchor:
+		n.Inlines = normalizeInlines(n.Inlines)
+		return n
+	case richdoc.CrossRef:
+		n.Inlines = normalizeInlines(n.Inlines)
+		return n
+	default:
+		return in
 	}
 }
 

@@ -463,6 +463,22 @@ func TestWriteSyntax(t *testing.T) {
 			).Doc(),
 			"| h |  |  |\n| :--- | ---: | --- |\n| 1 | 2 | 3 |\n", false,
 		},
+		{
+			// A soft line break (Parse preserves it as a literal '\n' in
+			// Text.Value) must not survive into an ATX heading line, which is
+			// a single physical line: an embedded newline would split "Bar"
+			// out of the heading into its own following paragraph on re-parse.
+			"heading-with-embedded-soft-break",
+			richdoc.New().Add(richdoc.Heading{Level: 2, Inlines: []richdoc.Inline{richdoc.Txt("Foo\nBar")}}).Doc(),
+			"## Foo Bar\n", false,
+		},
+		{
+			// Same hazard in a paragraph: an embedded newline right before a
+			// "---"/"===" line re-parses as an accidental Setext heading.
+			"paragraph-with-embedded-soft-break-before-dashes",
+			richdoc.New().P(richdoc.Txt("Foo\n---")).Doc(),
+			"Foo ---\n", false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
