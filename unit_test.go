@@ -658,6 +658,190 @@ func TestWriteSyntax(t *testing.T) {
 			richdoc.New().P(richdoc.Italic(richdoc.Bold(richdoc.Txt("bar")))).Doc(),
 			"***bar***\n", false,
 		},
+		{
+			// An empty paragraph has no first character to inspect.
+			"paragraph-empty-safe",
+			richdoc.New().P().Doc(),
+			"\n", false,
+		},
+		{
+			// A paragraph whose text starts with '#'-followed-by-space
+			// re-parses as an ATX heading (block parsing runs on raw bytes
+			// at column 0, before escapeText's per-character escaping is
+			// resolved) unless the leading '#' itself is escaped.
+			"paragraph-leading-hash-escaped",
+			richdoc.New().P(richdoc.Txt("# heading-like")).Doc(),
+			"\\# heading-like\n", false,
+		},
+		{
+			"paragraph-leading-hash-alone",
+			richdoc.New().P(richdoc.Txt("#")).Doc(),
+			"\\#\n", false,
+		},
+		{
+			// More than 6 leading '#' can never open an ATX heading, so
+			// this is left alone.
+			"paragraph-leading-hash-run-too-long-safe",
+			richdoc.New().P(richdoc.Txt("####### not a heading")).Doc(),
+			"####### not a heading\n", false,
+		},
+		{
+			// A '#' not followed by whitespace/EOL never opens a heading.
+			"paragraph-leading-hash-no-space-safe",
+			richdoc.New().P(richdoc.Txt("#hashtag")).Doc(),
+			"#hashtag\n", false,
+		},
+		{
+			// A leading '>' opens a blockquote regardless of what follows.
+			"paragraph-leading-blockquote-marker",
+			richdoc.New().P(richdoc.Txt(">quote-like")).Doc(),
+			"\\>quote-like\n", false,
+		},
+		{
+			"paragraph-leading-dash-list-marker",
+			richdoc.New().P(richdoc.Txt("- looks like a list")).Doc(),
+			"\\- looks like a list\n", false,
+		},
+		{
+			"paragraph-leading-dash-alone",
+			richdoc.New().P(richdoc.Txt("-")).Doc(),
+			"\\-\n", false,
+		},
+		{
+			// '-' not followed by whitespace and not a 3+ dash run is
+			// neither a list marker nor a thematic break.
+			"paragraph-leading-dash-safe",
+			richdoc.New().P(richdoc.Txt("-5")).Doc(),
+			"-5\n", false,
+		},
+		{
+			// Three dashes with nothing else on the line is a thematic
+			// break, independent of the list-marker check (no space
+			// follows the first dash here).
+			"paragraph-leading-dash-run-thematic-break",
+			richdoc.New().P(richdoc.Txt("---")).Doc(),
+			"\\---\n", false,
+		},
+		{
+			// Two dashes is neither a list marker (no space after) nor a
+			// thematic break (needs more than two).
+			"paragraph-leading-dash-run-too-short-safe",
+			richdoc.New().P(richdoc.Txt("--")).Doc(),
+			"--\n", false,
+		},
+		{
+			"paragraph-leading-plus-list-marker",
+			richdoc.New().P(richdoc.Txt("+ looks like a list")).Doc(),
+			"\\+ looks like a list\n", false,
+		},
+		{
+			"paragraph-leading-plus-alone",
+			richdoc.New().P(richdoc.Txt("+")).Doc(),
+			"\\+\n", false,
+		},
+		{
+			"paragraph-leading-plus-safe",
+			richdoc.New().P(richdoc.Txt("+1")).Doc(),
+			"+1\n", false,
+		},
+		{
+			// The CommonMark spec's own idiom for this: escape the
+			// delimiter, not the digits (digits are not ASCII punctuation
+			// and cannot be backslash-escaped).
+			"paragraph-leading-ordered-marker-dot",
+			richdoc.New().P(richdoc.Txt("1. not a list")).Doc(),
+			"1\\. not a list\n", false,
+		},
+		{
+			"paragraph-leading-ordered-marker-paren",
+			richdoc.New().P(richdoc.Txt("1) not a list")).Doc(),
+			"1\\) not a list\n", false,
+		},
+		{
+			// A delimiter at end-of-content is still a (empty) list item.
+			"paragraph-leading-ordered-marker-delimiter-at-eof",
+			richdoc.New().P(richdoc.Txt("1.")).Doc(),
+			"1\\.\n", false,
+		},
+		{
+			// The delimiter must be followed by whitespace or EOL to be a
+			// marker at all.
+			"paragraph-leading-ordered-no-space-after-delimiter-safe",
+			richdoc.New().P(richdoc.Txt("1.foo")).Doc(),
+			"1.foo\n", false,
+		},
+		{
+			"paragraph-leading-ordered-no-delimiter-char-safe",
+			richdoc.New().P(richdoc.Txt("1x not a list")).Doc(),
+			"1x not a list\n", false,
+		},
+		{
+			// 10+ consecutive digits can never be a list marker.
+			"paragraph-leading-ordered-too-many-digits-safe",
+			richdoc.New().P(richdoc.Txt("1234567890. ten digits")).Doc(),
+			"1234567890. ten digits\n", false,
+		},
+		{
+			// A digit run with nothing following it at all (no
+			// delimiter) is never a marker.
+			"paragraph-leading-digits-only-safe",
+			richdoc.New().P(richdoc.Txt("123")).Doc(),
+			"123\n", false,
+		},
+		{
+			// 4+ columns of leading space/tab reads back as an indented
+			// code block; a backslash cannot escape whitespace (it is not
+			// ASCII punctuation), so the first whitespace byte is instead
+			// replaced by its numeric character reference, which decodes
+			// back to the same byte without being literal column-0
+			// whitespace.
+			"paragraph-leading-four-spaces",
+			richdoc.New().P(richdoc.Txt("    indented-looking")).Doc(),
+			"&#32;   indented-looking\n", false,
+		},
+		{
+			// Up to 3 leading spaces is ordinary (allowed) paragraph
+			// indentation and needs no escaping.
+			"paragraph-leading-three-spaces-safe",
+			richdoc.New().P(richdoc.Txt("   safe")).Doc(),
+			"   safe\n", false,
+		},
+		{
+			// A single leading tab already reaches the 4-column stop.
+			"paragraph-leading-tab",
+			richdoc.New().P(richdoc.Txt("\tfoo")).Doc(),
+			"&#9;foo\n", false,
+		},
+		{
+			// Spaces and tabs mix along the same tab-stop-aware width
+			// count goldmark's own indented-code-block check uses.
+			"paragraph-leading-mixed-space-tab",
+			richdoc.New().P(richdoc.Txt("  \tfoo")).Doc(),
+			"&#32; \tfoo\n", false,
+		},
+		{
+			// A heading whose content is nothing but '#' characters would
+			// otherwise re-parse with NO text at all (goldmark's ATX
+			// "closing sequence" rule empties it); escaping the run
+			// preserves the literal hashes.
+			"heading-content-all-hashes",
+			richdoc.New().Add(richdoc.Heading{Level: 3, Inlines: []richdoc.Inline{richdoc.Txt("###")}}).Doc(),
+			"### \\###\n", false,
+		},
+		{
+			// A trailing '#' run preceded by whitespace is stripped as a
+			// "closing sequence" on re-parse unless escaped.
+			"heading-trailing-hash-after-space",
+			richdoc.New().Add(richdoc.Heading{Level: 2, Inlines: []richdoc.Inline{richdoc.Txt("foo ###")}}).Doc(),
+			"## foo \\###\n", false,
+		},
+		{
+			// A trailing '#' NOT preceded by whitespace is never stripped
+			// and needs no escaping.
+			"heading-trailing-hash-no-space-safe",
+			richdoc.New().Add(richdoc.Heading{Level: 1, Inlines: []richdoc.Inline{richdoc.Txt("foo#")}}).Doc(),
+			"# foo#\n", false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

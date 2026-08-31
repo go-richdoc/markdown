@@ -76,7 +76,24 @@ tree, up to harmless normalisation:
   and skew tightness in the process; alternating keeps them visibly separate,
   mirroring how nested emphasis falls back to `_` above. The tracking is
   scoped to each block sequence (list items and block quotes recurse with
-  their own), so nested adjacent sub-lists get the same treatment.
+  their own), so nested adjacent sub-lists get the same treatment;
+- a paragraph whose rendered text would otherwise begin with block-level
+  syntax has its first character neutralised: a leading `#` (heading), `>`
+  (blockquote), `-` / `+` (list marker, or a bare `-` in a run of 3+, a
+  thematic break) followed by a space or end-of-line, or an ordered-list
+  marker (`1.` / `1)`) get the responsible character backslash-escaped
+  (`1\. not a list`, the same idiom the CommonMark spec itself uses); 4 or
+  more columns of leading space/tab (which would otherwise read back as an
+  indented code block) has its first whitespace byte written as a numeric
+  character reference (`&#32;` / `&#9;`) instead, since backslash can't
+  escape whitespace. Block parsing runs on raw bytes at column 0 of a line,
+  before any inline backslash escape is resolved, so this is checked
+  independently of — and in addition to — escapeText's ordinary
+  character-class escaping, which is position-blind;
+- a heading whose text ends in a run of `#` preceded by whitespace (or made
+  up entirely of `#`) has that run's leading `#` backslash-escaped, or
+  goldmark's ATX "closing sequence" rule strips it on re-parse — in the
+  all-`#` case, silently emptying the heading's text entirely.
 
 ## Node mapping
 
