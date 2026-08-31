@@ -280,9 +280,9 @@ func (w *writer) renderInline(in richdoc.Inline) string {
 	case richdoc.Text:
 		return escapeText(n.Value)
 	case richdoc.Emph:
-		return "*" + w.renderInlines(n.Inlines) + "*"
+		return wrapDelimited(w.renderInlines(n.Inlines), "*", "_")
 	case richdoc.Strong:
-		return "**" + w.renderInlines(n.Inlines) + "**"
+		return wrapDelimited(w.renderInlines(n.Inlines), "**", "__")
 	case richdoc.Strikethrough:
 		return "~~" + w.renderInlines(n.Inlines) + "~~"
 	case richdoc.Code:
@@ -330,14 +330,91 @@ func (w *writer) renderCrossRef(n richdoc.CrossRef) string {
 	return "[" + text + "](#" + n.Target + ")"
 }
 
+// wrapDelimited wraps inner in marker, falling back to altMarker when
+// wrapping in marker would let it merge with the SAME marker character
+// already at inner's own boundary and change the total run length —
+// CommonMark determines strong vs. emphasis purely by consecutive
+// delimiter-run length, so "*" wrapped around content starting or ending in
+// exactly one unpaired "*" (nested single emphasis, the same marker this
+// writer always prefers) silently becomes a run of two, re-parsing as
+// strong instead of nested emphasis. It must NOT trigger when the adjacent
+// run is already a DIFFERENT length, though — "*" next to a leading "**"
+// (an inner Strong) forms "***", CommonMark's own idiom for strong-wrapping-
+// emphasis and already correct as-is; forcing "_" there would be wrong, not
+// merely unnecessary (verified against the CommonMark spec corpus: an
+// unconditional same-character check regressed two strong/emphasis cases
+// this exact refinement fixes). Real source avoids the collision by
+// alternating "*"/"_" between nesting levels; this writer always emits "*"
+// (see the README's own normalisation note) and falls back to "_" only for
+// the specific run-length collision this function detects.
+func wrapDelimited(inner, marker, altMarker string) string {
+	m := marker
+	if collidesAtBoundary(inner, marker) {
+		m = altMarker
+	}
+	return m + inner + m
+}
+
+// collidesAtBoundary reports whether inner starts or ends with a run of
+// marker's character whose length is EXACTLY len(marker) — neither shorter
+// (too little to matter) nor longer (already forms a bigger run that
+// CommonMark decomposes on its own, e.g. "*" next to a leading "**" from a
+// nested Strong makes "***", its own idiom for strong-wrapping-emphasis and
+// already correct unmodified). An exact-length match is the one case where
+// concatenating marker doubles the run to exactly 2*len(marker), changing
+// what it means.
+func collidesAtBoundary(inner, marker string) bool {
+	n := len(marker)
+	hasExactRun := func(fromEnd bool) bool {
+		if len(inner) < n {
+			return false
+		}
+		var run string
+		if fromEnd {
+			run = inner[len(inner)-n:]
+		} else {
+			run = inner[:n]
+		}
+		if run != strings.Repeat(marker[:1], n) {
+			return false
+		}
+		if fromEnd {
+			return len(inner) == n || inner[len(inner)-n-1] != marker[0]
+		}
+		return len(inner) == n || inner[n] != marker[0]
+	}
+	return hasExactRun(false) || hasExactRun(true)
+}
+
 // renderCode renders an inline code span, widening the backtick fence and
-// padding with spaces when the content itself contains backticks.
+// padding with spaces when the content itself contains backticks, or would
+// otherwise trigger CommonMark's own space-padding-strip rule on re-parse
+// (goldmark's parser/code_span.go trims exactly one leading and one trailing
+// byte whenever both are a space or newline and the content isn't entirely
+// blank) — value already reflects that stripping, having come from richdoc's
+// Code.Value, so writing it back bare would have it stripped a SECOND time.
+// Padding with one extra space on each side survives exactly one such strip
+// and reproduces value unchanged.
 func renderCode(value string) string {
 	fence := strings.Repeat("`", longestBacktickRun(value)+1)
-	if strings.HasPrefix(value, "`") || strings.HasSuffix(value, "`") {
+	if needsCodeSpanPadding(value) {
 		return fence + " " + value + " " + fence
 	}
 	return fence + value + fence
+}
+
+func needsCodeSpanPadding(value string) bool {
+	if value == "" {
+		return false
+	}
+	if strings.HasPrefix(value, "`") || strings.HasSuffix(value, "`") {
+		return true
+	}
+	spaceOrNL := func(b byte) bool { return b == ' ' || b == '\n' }
+	if !spaceOrNL(value[0]) || !spaceOrNL(value[len(value)-1]) {
+		return false
+	}
+	return strings.Trim(value, " \n") != ""
 }
 
 // titleSuffix formats an optional link/image title, backslash-escaping any

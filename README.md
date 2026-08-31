@@ -54,7 +54,16 @@ tree, up to harmless normalisation:
   soft break's own HTML rendering (whitespace);
 - a link/image destination containing a space, a parenthesis, or a trailing
   backslash written in the `<...>` form rather than the bare `(url)` form,
-  which can't represent any of those safely.
+  which can't represent any of those safely;
+- a code span whose content starts and ends with a space padded with one
+  extra space on each side — the content already reflects CommonMark's own
+  single-space padding strip, so writing it back with a bare fence would
+  have it stripped a second time on re-parse;
+- nested single emphasis falls back to `_` at whichever boundary sharing `*`
+  with its own nested content would merge into `**` (strong) — but not when
+  the adjacent run is a different length already forming its own valid
+  construct (`*` next to a leading `**` from a nested `Strong` makes `***`,
+  CommonMark's own strong-wrapping-emphasis idiom, and is left alone).
 
 ## Node mapping
 
