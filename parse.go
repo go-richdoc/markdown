@@ -249,18 +249,34 @@ func (c *converter) convertInline(n gast.Node) []richdoc.Inline {
 			}}
 		}
 		return []richdoc.Inline{richdoc.Link{
-			URL:     string(i.Destination),
-			Title:   string(i.Title),
+			// goldmark's Destination/Title are the RAW source bytes (see
+			// parseLinkDestination in its own parser/link.go): a
+			// backslash-escaped or entity-encoded destination or title is
+			// only resolved by its HTML renderer at output time
+			// (util.URLEscape's resolveReference step, and defaultWriter.Write
+			// for the title), never by the parser itself. decodeText applies
+			// that same resolution so richdoc stores the semantic value, not
+			// source syntax — matching every other inline conversion here.
+			URL:     decodeText(i.Destination),
+			Title:   decodeText(i.Title),
 			Inlines: c.convertInlines(i),
 		}}
 	case *gast.Image:
 		return []richdoc.Inline{richdoc.Image{
-			URL:   string(i.Destination),
+			URL:   decodeText(i.Destination),
 			Alt:   decodeText(i.Text(c.src)),
-			Title: string(i.Title),
+			Title: decodeText(i.Title),
 		}}
 	case *gast.AutoLink:
 		url := string(i.URL(c.src))
+		if i.AutoLinkType == gast.AutoLinkEmail {
+			// AutoLink.URL only prepends a scheme when the node carries an
+			// explicit Protocol (a "<scheme:...>" autolink); an email
+			// autolink ("<foo@bar.example>") has none, and goldmark's own
+			// HTML renderer adds "mailto:" separately at render time — so it
+			// has to be added here too, or the link is unreachable.
+			url = "mailto:" + url
+		}
 		return []richdoc.Inline{richdoc.Link{
 			URL:     url,
 			Inlines: []richdoc.Inline{richdoc.Text{Value: string(i.Label(c.src))}},

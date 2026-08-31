@@ -137,7 +137,7 @@ func renderCodeBlock(n richdoc.CodeBlock) string {
 		fence = "```"
 	}
 	body := n.Text
-	if !strings.HasSuffix(body, "\n") {
+	if body != "" && !strings.HasSuffix(body, "\n") {
 		body += "\n"
 	}
 	return fence + n.Language + "\n" + body + fence
@@ -288,9 +288,9 @@ func (w *writer) renderInline(in richdoc.Inline) string {
 	case richdoc.Code:
 		return renderCode(n.Value)
 	case richdoc.Link:
-		return "[" + w.renderInlines(n.Inlines) + "](" + n.URL + titleSuffix(n.Title) + ")"
+		return "[" + w.renderInlines(n.Inlines) + "](" + linkDestination(n.URL) + titleSuffix(n.Title) + ")"
 	case richdoc.Image:
-		return "![" + escapeText(n.Alt) + "](" + n.URL + titleSuffix(n.Title) + ")"
+		return "![" + escapeText(n.Alt) + "](" + linkDestination(n.URL) + titleSuffix(n.Title) + ")"
 	case richdoc.Math:
 		return "$" + n.TeX + "$"
 	case richdoc.RawInline:
@@ -340,12 +340,49 @@ func renderCode(value string) string {
 	return fence + value + fence
 }
 
-// titleSuffix formats an optional link/image title.
+// titleSuffix formats an optional link/image title, backslash-escaping any
+// double quote in it — the title text itself may legitimately contain one
+// (`'title "and" title'`), and writing it through unescaped would close the
+// title early and break the surrounding link.
 func titleSuffix(title string) string {
 	if title == "" {
 		return ""
 	}
-	return " \"" + title + "\""
+	return " \"" + strings.ReplaceAll(title, "\"", "\\\"") + "\""
+}
+
+// linkDestination formats a link/image destination, wrapping it in `<...>`
+// whenever the bare parenthesized form (`(url)`) can't represent it safely:
+// a space or control character ends the destination early, a parenthesis is
+// ambiguous with the closing `)`, and a trailing backslash would escape that
+// closing `)` in the bare form. Escaping is scoped to what the `<...>` form
+// itself requires (`\`, `<`, `>`) so a URL that needs no wrapping round-trips
+// unmodified.
+func linkDestination(url string) string {
+	if !needsAngleBrackets(url) {
+		return url
+	}
+	var sb strings.Builder
+	sb.WriteByte('<')
+	for _, r := range url {
+		switch r {
+		case '\\', '<', '>':
+			sb.WriteByte('\\')
+		}
+		sb.WriteRune(r)
+	}
+	sb.WriteByte('>')
+	return sb.String()
+}
+
+func needsAngleBrackets(url string) bool {
+	for _, r := range url {
+		switch r {
+		case ' ', '\t', '\n', '(', ')', '<', '>':
+			return true
+		}
+	}
+	return strings.HasSuffix(url, "\\")
 }
 
 // escapeText backslash-escapes the ASCII punctuation that would otherwise be
@@ -366,7 +403,10 @@ func escapeText(s string) string {
 			// fix renderTableCell already applies for cells.
 			sb.WriteByte(' ')
 			continue
-		case '\\', '`', '*', '_', '[', ']', '<', '~':
+		case '\\', '`', '*', '_', '[', ']', '<', '~', '!':
+			// '!' needs escaping too: a literal "!" immediately followed by
+			// a Link/CrossRef this writer renders as "[text](url)" would
+			// otherwise re-parse as an image marker on the next Parse.
 			sb.WriteByte('\\')
 		}
 		sb.WriteRune(r)

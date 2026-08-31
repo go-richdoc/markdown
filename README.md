@@ -51,7 +51,10 @@ tree, up to harmless normalisation:
   through unchanged would corrupt the block it lands in: an ATX heading is a
   single physical line, and a paragraph line ending right before a `---`/`===`
   line re-parses as an accidental Setext heading. Flattening it matches the
-  soft break's own HTML rendering (whitespace).
+  soft break's own HTML rendering (whitespace);
+- a link/image destination containing a space, a parenthesis, or a trailing
+  backslash written in the `<...>` form rather than the bare `(url)` form,
+  which can't represent any of those safely.
 
 ## Node mapping
 
