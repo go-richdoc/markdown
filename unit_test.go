@@ -375,6 +375,68 @@ func TestWriteSyntax(t *testing.T) {
 			"1. a\n", false,
 		},
 		{
+			// Two adjacent unordered List blocks would re-merge into one
+			// list on the next Parse if both wrote the default "-"
+			// marker (goldmark's own list grammar treats a same-bullet
+			// run, blank line or not, as one continuing list). The
+			// second must alternate to "+" to stay visibly separate.
+			"adjacent-unordered-lists-alternate-marker",
+			richdoc.New().
+				UList(true, richdoc.Item(richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("a")}})).
+				UList(true, richdoc.Item(richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("b")}})).
+				Doc(),
+			"- a\n\n+ b\n", false,
+		},
+		{
+			// Same hazard for ordered lists: the delimiter alternates
+			// between "." and ")" instead of the bullet character.
+			"adjacent-ordered-lists-alternate-delimiter",
+			richdoc.New().
+				OList(1, true, richdoc.Item(richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("a")}})).
+				OList(2, true, richdoc.Item(richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("b")}})).
+				Doc(),
+			"1. a\n\n2) b\n", false,
+		},
+		{
+			// Three lists in a row alternate back to the default marker
+			// for the third rather than colliding with the second (which
+			// only needs to differ from its own immediate neighbours).
+			"three-adjacent-unordered-lists-alternate-in-sequence",
+			richdoc.New().
+				UList(true, richdoc.Item(richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("a")}})).
+				UList(true, richdoc.Item(richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("b")}})).
+				UList(true, richdoc.Item(richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("c")}})).
+				Doc(),
+			"- a\n\n+ b\n\n- c\n", false,
+		},
+		{
+			// A List immediately followed by a different-kind List (one
+			// ordered, one not) never needs alternation: the two markers
+			// already can't collide.
+			"adjacent-lists-different-kind-no-alternation",
+			richdoc.New().
+				UList(true, richdoc.Item(richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("a")}})).
+				OList(1, true, richdoc.Item(richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("b")}})).
+				Doc(),
+			"- a\n\n1. b\n", false,
+		},
+		{
+			// The adjacency tracking is scoped per block sequence, not
+			// global: two adjacent sub-lists nested inside a list item
+			// need the same alternation as top-level siblings.
+			"adjacent-nested-lists-alternate-marker",
+			richdoc.New().UList(true, richdoc.Item(
+				richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("outer")}},
+				richdoc.List{Start: 1, Tight: true, Items: []richdoc.ListItem{
+					{Blocks: []richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("a")}}}},
+				}},
+				richdoc.List{Start: 1, Tight: true, Items: []richdoc.ListItem{
+					{Blocks: []richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("b")}}}},
+				}},
+			)).Doc(),
+			"- outer\n  - a\n  + b\n", false,
+		},
+		{
 			"blockquote",
 			richdoc.New().Quote(richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Txt("q")}}).Doc(),
 			"> q\n", false,

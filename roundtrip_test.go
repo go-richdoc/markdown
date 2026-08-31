@@ -42,6 +42,21 @@ var corpus = map[string]string{
 
 	"ordered-list": "3. third\n4. fourth\n5. fifth\n",
 
+	// A bullet-character change (goldmark's own list grammar, mirroring
+	// CommonMark) starts a genuinely new list even with no blank line
+	// between; Parse must keep them as two List blocks, and Write must
+	// alternate markers so the rewritten source still parses as two lists
+	// (not one re-merged, wrongly loosened list) on the next Parse.
+	"adjacent-unordered-lists-marker-change": "- foo\n- bar\n+ baz\n",
+
+	// Same hazard for an ordered-list delimiter change ("." to ")").
+	"adjacent-ordered-lists-delimiter-change": "1. foo\n2. bar\n3) baz\n",
+
+	// The same marker-change split nested two levels deep inside a list
+	// item, exercising the adjacency tracking scoped to that item's own
+	// block sequence rather than the top-level document.
+	"adjacent-nested-lists-marker-change": "- outer\n  - a\n  - b\n  + c\n",
+
 	"list-item-multiblock": "- first paragraph\n\n  second paragraph in the same item\n\n- next item\n",
 
 	"blockquote": "> quoted line one\n> quoted line two\n>\n> quoted paragraph two\n",

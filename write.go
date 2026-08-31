@@ -81,16 +81,43 @@ func (w *writer) renderBlocks(blocks []richdoc.Block) string {
 // renderBlocksSep renders a sequence of blocks joined by sep. A tight list
 // passes a single newline so that a nested block (for example a sub-list) does
 // not introduce the blank line that would make the enclosing list loose.
+//
+// Two ADJACENT List blocks that are both ordered or both unordered only exist
+// side by side in the model because Parse's source split them into separate
+// lists (a bullet-character or delimiter change, per CommonMark's own list
+// grammar) — richdoc.List otherwise has no way to record that split, since a
+// single loose list with a blank line between items stays one List node.
+// Writing both with this writer's one default marker ("-", or "N. ") would
+// undo exactly that split: goldmark re-parses adjacent same-marker lists as
+// one merged list on the next Parse, corrupting both list count and
+// tightness. alternateListMarker tracks, across this one sibling sequence,
+// whether the immediately preceding block was a List of the same Ordered
+// kind and which marker variant it used, so this List can be written with
+// the OTHER variant ("+", or "N) ") and stay visibly separate — mirroring
+// wrapDelimited's marker-alternation precedent for the analogous emphasis-
+// merge problem. Recursing into each container's own block sequence (list
+// items, block quotes) via a fresh call keeps the tracking scoped to true
+// siblings, so nested lists at any depth get the same protection.
 func (w *writer) renderBlocksSep(blocks []richdoc.Block, sep string) string {
 	parts := make([]string, 0, len(blocks))
+	prevWasList := false
+	var prevOrdered, prevAlt bool
 	for _, b := range blocks {
-		parts = append(parts, w.renderBlock(b))
+		l, isList := b.(richdoc.List)
+		alt := isList && prevWasList && prevOrdered == l.Ordered && !prevAlt
+		parts = append(parts, w.renderBlock(b, alt))
+		prevWasList = isList
+		if isList {
+			prevOrdered, prevAlt = l.Ordered, alt
+		}
 	}
 	return strings.Join(parts, sep)
 }
 
-// renderBlock renders a single block to CommonMark without a trailing newline.
-func (w *writer) renderBlock(b richdoc.Block) string {
+// renderBlock renders a single block to CommonMark without a trailing
+// newline. altListMarker is only consulted when b is a richdoc.List; see
+// renderBlocksSep for why an adjacent same-kind list needs it.
+func (w *writer) renderBlock(b richdoc.Block, altListMarker bool) string {
 	switch n := b.(type) {
 	case richdoc.Heading:
 		level := n.Level
@@ -112,7 +139,7 @@ func (w *writer) renderBlock(b richdoc.Block) string {
 	case richdoc.BlockQuote:
 		return prefixLines(w.renderBlocks(n.Blocks), "> ", ">")
 	case richdoc.List:
-		return w.renderList(n)
+		return w.renderList(n, altListMarker)
 	case richdoc.Table:
 		return w.renderTable(n)
 	case richdoc.MathBlock:
@@ -143,19 +170,28 @@ func renderCodeBlock(n richdoc.CodeBlock) string {
 	return fence + n.Language + "\n" + body + fence
 }
 
-// renderList renders an ordered or unordered list, honouring tightness.
-func (w *writer) renderList(l richdoc.List) string {
+// renderList renders an ordered or unordered list, honouring tightness. alt
+// selects the alternate marker glyph ("+" for unordered, ")" as the ordered
+// delimiter) instead of this writer's default ("-", "."), used when the
+// immediately preceding sibling is a List of the same Ordered kind that
+// would otherwise re-merge with this one on the next Parse — see
+// renderBlocksSep.
+func (w *writer) renderList(l richdoc.List, alt bool) string {
 	blockSep := "\n\n"
 	sep := "\n\n"
 	if l.Tight {
 		blockSep = "\n"
 		sep = "\n"
 	}
+	bullet, delim := "-", "."
+	if alt {
+		bullet, delim = "+", ")"
+	}
 	items := make([]string, 0, len(l.Items))
 	for i, it := range l.Items {
-		marker := "- "
+		marker := bullet + " "
 		if l.Ordered {
-			marker = itoa(l.Start+i) + ". "
+			marker = itoa(l.Start+i) + delim + " "
 		}
 		items = append(items, indentItem(w.renderBlocksSep(it.Blocks, blockSep), marker))
 	}
