@@ -63,7 +63,20 @@ tree, up to harmless normalisation:
   with its own nested content would merge into `**` (strong) — but not when
   the adjacent run is a different length already forming its own valid
   construct (`*` next to a leading `**` from a nested `Strong` makes `***`,
-  CommonMark's own strong-wrapping-emphasis idiom, and is left alone).
+  CommonMark's own strong-wrapping-emphasis idiom, and is left alone);
+- two adjacent `List` blocks of the same kind (both ordered or both
+  unordered) alternate their marker glyph — unordered `-`/`+`, ordered
+  delimiter `.`/`)` — instead of both using the writer's default. `List`
+  carries no record of which literal marker the source used, only
+  `Ordered`/`Start`/`Tight`; two such lists only sit side by side in the
+  model because Parse's source already split them (a bullet-character or
+  delimiter change, per CommonMark's own list grammar — a single loose list
+  never appears as two adjacent `List` nodes). Writing both with the same
+  glyph would have goldmark re-merge them into one list on the next `Parse`
+  and skew tightness in the process; alternating keeps them visibly separate,
+  mirroring how nested emphasis falls back to `_` above. The tracking is
+  scoped to each block sequence (list items and block quotes recurse with
+  their own), so nested adjacent sub-lists get the same treatment.
 
 ## Node mapping
 
