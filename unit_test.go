@@ -85,6 +85,26 @@ func TestParseNodes(t *testing.T) {
 			}}},
 		},
 		{
+			// goldmark's AutoLink.URL doesn't add "mailto:" itself for an
+			// email autolink (only its own HTML renderer does, separately);
+			// Parse has to add it, or the link is unreachable.
+			"autolink-email",
+			"<a@b.example>\n",
+			[]richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{
+				richdoc.Link{URL: "mailto:a@b.example", Inlines: []richdoc.Inline{richdoc.Text{Value: "a@b.example"}}},
+			}}},
+		},
+		{
+			// goldmark's Link.Destination/.Title are raw source bytes; a
+			// backslash-escaped destination must come out decoded, matching
+			// what goldmark's own HTML renderer resolves it to.
+			"link-destination-decoded",
+			`[t](foo\(bar\))` + "\n",
+			[]richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{
+				richdoc.Link{URL: "foo(bar)", Inlines: []richdoc.Inline{richdoc.Text{Value: "t"}}},
+			}}},
+		},
+		{
 			"fenced-code-lang",
 			"```rust\nlet x = 1;\n```\n",
 			[]richdoc.Block{richdoc.CodeBlock{Language: "rust", Text: "let x = 1;\n"}},
@@ -478,6 +498,51 @@ func TestWriteSyntax(t *testing.T) {
 			"paragraph-with-embedded-soft-break-before-dashes",
 			richdoc.New().P(richdoc.Txt("Foo\n---")).Doc(),
 			"Foo ---\n", false,
+		},
+		{
+			// An empty fenced code block must stay empty: unconditionally
+			// appending a trailing newline to an empty body adds a spurious
+			// blank content line, which re-parses as one line of content
+			// instead of zero.
+			"empty-fenced-code-block",
+			richdoc.New().Add(richdoc.CodeBlock{}).Doc(),
+			"```\n```\n", false,
+		},
+		{
+			// A literal "!" right before what this writer renders as
+			// "[text](url)" must be escaped, or it re-parses as an image
+			// marker on the next Parse.
+			"bang-before-link",
+			richdoc.New().P(richdoc.Txt("!"), richdoc.Href("u", "", richdoc.Txt("t"))).Doc(),
+			`\![t](u)` + "\n", false,
+		},
+		{
+			// A link destination containing a space or parenthesis can't be
+			// written in the bare "(url)" form; it needs the "<url>" form.
+			"link-destination-with-space",
+			richdoc.New().P(richdoc.Href("my uri", "", richdoc.Txt("t"))).Doc(),
+			"[t](<my uri>)\n", false,
+		},
+		{
+			"link-destination-with-paren",
+			richdoc.New().P(richdoc.Href("foo(bar)", "", richdoc.Txt("t"))).Doc(),
+			"[t](<foo(bar)>)\n", false,
+		},
+		{
+			// A trailing backslash would escape the closing ")" in the bare
+			// form, so it forces the "<...>" form too — and the backslash
+			// itself then needs escaping inside that form, or it would
+			// escape the closing ">" instead.
+			"link-destination-with-trailing-backslash",
+			richdoc.New().P(richdoc.Href(`foo\`, "", richdoc.Txt("t"))).Doc(),
+			`[t](<foo\\>)` + "\n", false,
+		},
+		{
+			// A title containing a double quote must be escaped, or it
+			// closes the title early.
+			"link-title-with-quote",
+			richdoc.New().P(richdoc.Href("u", `say "hi"`, richdoc.Txt("t"))).Doc(),
+			`[t](u "say \"hi\"")` + "\n", false,
 		},
 	}
 	for _, tc := range cases {
