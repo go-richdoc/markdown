@@ -127,13 +127,13 @@ func (w *writer) renderBlock(b richdoc.Block, altListMarker bool) string {
 		if level > 6 {
 			level = 6
 		}
-		s := strings.Repeat("#", level) + " " + w.renderInlines(n.Inlines)
+		s := strings.Repeat("#", level) + " " + headingTrailingHashEscape(w.renderInlines(n.Inlines))
 		if n.ID != "" {
 			s += " {#" + n.ID + "}"
 		}
 		return s
 	case richdoc.Paragraph:
-		return w.renderInlines(n.Inlines)
+		return escapeLeadingMarker(w.renderInlines(n.Inlines))
 	case richdoc.CodeBlock:
 		return renderCodeBlock(n)
 	case richdoc.BlockQuote:
@@ -525,6 +525,197 @@ func escapeText(s string) string {
 		sb.WriteRune(r)
 	}
 	return sb.String()
+}
+
+// escapeLeadingMarker backslash-escapes (or, for leading indentation,
+// numeric-character-references) exactly the FIRST character of a paragraph's
+// fully-rendered content, when — and only when — that character would be
+// reinterpreted as different block-level syntax on re-parse.
+//
+// escapeText is character-class-driven and position-blind: it can express
+// "always escape a literal backtick" but not "escape '#' only when it opens
+// the line". Block parsing runs on raw bytes, column 0 of a line, BEFORE any
+// inline backslash escape is resolved (goldmark's own atx_heading.go,
+// list_item.go, blockquote.go and code_block.go all key off the raw byte at
+// BlockOffset) — so a decoded entity or a plain Text value that happens to
+// start with '#', '-', '+', a digit run, '>', or 4+ columns of leading
+// whitespace silently becomes a heading, list item, blockquote or indented
+// code block one Parse->Write round trip later. '*', '_', '`' and '~' need
+// no extra handling here: escapeText already escapes every occurrence of
+// those unconditionally (for inline emphasis/code-span/strikethrough
+// safety), which as a side effect already breaks any leading run of them
+// that fenced-code or thematic-break syntax would otherwise read.
+//
+// This same "column 0 of the line" rule reapplies, independently, wherever
+// the paragraph ends up nested — inside a blockquote (right after its own
+// "> "), inside a list item (right after its own marker) — because both
+// recursively re-parse their content as their own mini block-parsing
+// context starting at ITS column 0. Rather than thread that context through
+// the renderer, this check runs unconditionally on every paragraph; escaping
+// a leading character that turns out not to be at true column 0 (because a
+// list/blockquote prefix landed in front of it after all) is simply
+// unnecessary, never wrong — it still decodes back to the same text.
+func escapeLeadingMarker(s string) string {
+	if s == "" {
+		return s
+	}
+	if esc, ok := escapeLeadingIndent(s); ok {
+		return esc
+	}
+	switch {
+	case s[0] == '#':
+		if leadingHashRunOpensHeading(s) {
+			return "\\" + s
+		}
+	case s[0] == '>':
+		// A blockquote marker needs nothing after it — even ">foo" opens one.
+		return "\\" + s
+	case s[0] == '-':
+		// Dangerous as a bullet-list marker ("- foo", or bare "-") and,
+		// independently, as an all-dashes thematic break ("---").
+		if len(s) == 1 || isSpaceOrTab(s[1]) || isThematicBreakDashRun(s) {
+			return "\\" + s
+		}
+	case s[0] == '+':
+		if len(s) == 1 || isSpaceOrTab(s[1]) {
+			return "\\" + s
+		}
+	case s[0] >= '0' && s[0] <= '9':
+		if esc, ok := escapeOrderedMarker(s); ok {
+			return esc
+		}
+	}
+	return s
+}
+
+// isSpaceOrTab reports whether b is an ASCII space or tab.
+func isSpaceOrTab(b byte) bool {
+	return b == ' ' || b == '\t'
+}
+
+// leadingHashRunOpensHeading reports whether s starts with a run of 1-6 '#'
+// characters immediately followed by a space, a tab, or nothing else —
+// exactly the condition goldmark's atx_heading.go uses to open an ATX
+// heading (a run of more than 6, or not followed by whitespace/EOL, is left
+// alone: it can never be misread as a heading).
+func leadingHashRunOpensHeading(s string) bool {
+	i := 0
+	for i < len(s) && s[i] == '#' {
+		i++
+	}
+	if i > 6 {
+		return false
+	}
+	return i == len(s) || isSpaceOrTab(s[i])
+}
+
+// isThematicBreakDashRun reports whether s, taken as a whole line, is a
+// thematic break made of dashes and spaces: nothing but '-' and space/tab,
+// with more than two dashes — goldmark's thematic_break.go isThematicBreak.
+func isThematicBreakDashRun(s string) bool {
+	count := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case ' ', '\t':
+		case '-':
+			count++
+		default:
+			return false
+		}
+	}
+	return count > 2
+}
+
+// escapeOrderedMarker reports whether s opens with an ordered-list marker —
+// 1-9 digits followed by '.' or ')' and then a space, a tab, or nothing else
+// (goldmark's list.go parseListItem; a run of 10+ digits, or a delimiter not
+// immediately followed by whitespace/EOL, is never a list marker) — and if
+// so returns s with a backslash inserted before that '.'/')' delimiter,
+// mirroring the CommonMark spec's own idiom for this exact case ("1\. not a
+// list"). Digits themselves cannot be backslash-escaped: CommonMark only
+// recognises the escape before ASCII punctuation.
+func escapeOrderedMarker(s string) (string, bool) {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	if i == 0 || i > 9 || i >= len(s) {
+		return s, false
+	}
+	d := s[i]
+	if d != '.' && d != ')' {
+		return s, false
+	}
+	rest := s[i+1:]
+	if rest == "" || isSpaceOrTab(rest[0]) {
+		return s[:i] + "\\" + string(d) + rest, true
+	}
+	return s, false
+}
+
+// escapeLeadingIndent reports whether s opens with 4 or more columns of
+// space/tab indentation — goldmark's code_block.go reads that as an indented
+// code block, tabs expanding to the next 4-column stop the same way
+// util.TabWidth does — and if so returns s with its first whitespace
+// character replaced by the equivalent numeric character reference. A
+// backslash cannot help here (CommonMark backslash-escapes only ASCII
+// punctuation, and space/tab are neither); a character reference decodes
+// back to the exact same byte on re-parse while no longer being literal
+// column-0 whitespace, which is all the indented-code-block check looks at.
+func escapeLeadingIndent(s string) (string, bool) {
+	if s[0] != ' ' && s[0] != '\t' {
+		return s, false
+	}
+	width := 0
+scan:
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case ' ':
+			width++
+		case '\t':
+			width += 4 - width%4
+		default:
+			break scan
+		}
+		if width >= 4 {
+			break scan
+		}
+	}
+	if width < 4 {
+		return s, false
+	}
+	if s[0] == '\t' {
+		return "&#9;" + s[1:], true
+	}
+	return "&#32;" + s[1:], true
+}
+
+// headingTrailingHashEscape backslash-escapes a trailing run of '#' in a
+// heading's rendered content that goldmark's atx_heading.go would otherwise
+// strip as a "closing sequence" on re-parse: a run of 1+ '#' at the very end
+// of the line, preceded by whitespace, or making up the WHOLE line (which
+// empties the heading entirely — "### ###" reads back with no text at all).
+// Block-level parsing scans these raw bytes before backslash escapes are
+// resolved, so escaping just the first '#' of that run — anywhere within it,
+// since the scan walks in from the end and stops at the first non-'#' byte —
+// breaks the raw-byte scan while still decoding back to the same literal
+// text.
+func headingTrailingHashEscape(s string) string {
+	n := len(s)
+	i := n
+	for i > 0 && s[i-1] == '#' {
+		i--
+	}
+	if i == n {
+		return s // no trailing '#' run
+	}
+	if i == 0 {
+		return "\\" + s // the entire content is '#' characters
+	}
+	if isSpaceOrTab(s[i-1]) {
+		return s[:i] + "\\" + s[i:]
+	}
+	return s
 }
 
 // longestBacktickRun returns the length of the longest run of consecutive
