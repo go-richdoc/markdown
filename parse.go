@@ -4,6 +4,9 @@
 package markdown
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/go-richdoc/richdoc"
 	"github.com/yuin/goldmark"
 	gast "github.com/yuin/goldmark/ast"
@@ -329,9 +332,93 @@ func cleanFragment(frag []byte) bool {
 // resolving character references and removing backslash escapes, matching what
 // goldmark's HTML renderer would emit (minus HTML escaping). richdoc holds
 // neutral literal text, so [Write] re-adds the escapes when it emits Markdown.
+//
+// This has to be goldmark's own single left-to-right scan (ported from
+// defaultWriter.Write in its renderer/html package, read directly), not three
+// independent passes over the whole string — an earlier version ran
+// ResolveNumericReferences/ResolveEntityNames/UnescapePunctuations back to
+// back, which gets the ORDER of interaction wrong: goldmark's escape check
+// happens before its entity check at each position, so a backslash directly
+// before an entity-reference-shaped run ("\&ouml;") escapes the "&" itself,
+// which then can never start an entity at all. A three-pass version instead
+// resolves the entity first (nothing there yet objects to the "&" being
+// followed by a bare backslash from three characters back) and only then
+// tries to un-escape the leftover backslash against whatever character the
+// entity resolved to — usually not punctuation, so the backslash survives
+// where real goldmark would have dropped it. Caught via the CommonMark spec
+// corpus, not by inspection.
 func decodeText(raw []byte) string {
-	decoded := util.ResolveNumericReferences(raw)
-	decoded = util.ResolveEntityNames(decoded)
-	decoded = util.UnescapePunctuations(decoded)
-	return string(decoded)
+	var sb strings.Builder
+	sb.Grow(len(raw))
+	escaped := false
+	limit := len(raw)
+	n := 0
+	for i := 0; i < limit; i++ {
+		c := raw[i]
+		if escaped {
+			if util.IsPunct(c) {
+				sb.Write(raw[n : i-1])
+				n = i
+				escaped = false
+				continue
+			}
+			escaped = false
+		}
+		if c == '\x00' {
+			sb.Write(raw[n:i])
+			sb.WriteRune(0xFFFD)
+			n = i + 1
+			continue
+		}
+		if c == '&' {
+			pos := i
+			next := i + 1
+			if next < limit && raw[next] == '#' {
+				nnext := next + 1
+				if nnext < limit {
+					nc := raw[nnext]
+					if nc == 'x' || nc == 'X' {
+						start := nnext + 1
+						end, ok := util.ReadWhile(raw, [2]int{start, limit}, util.IsHexDecimal)
+						if ok && end < limit && raw[end] == ';' && end-start < 7 {
+							v, _ := strconv.ParseUint(string(raw[start:end]), 16, 32)
+							sb.Write(raw[n:pos])
+							n = end + 1
+							sb.WriteRune(util.ToValidRune(rune(v)))
+							i = end
+							continue
+						}
+					} else if nc >= '0' && nc <= '9' {
+						start := nnext
+						end, ok := util.ReadWhile(raw, [2]int{start, limit}, util.IsNumeric)
+						if ok && end < limit && end-start < 8 && raw[end] == ';' {
+							v, _ := strconv.ParseUint(string(raw[start:end]), 10, 32)
+							sb.Write(raw[n:pos])
+							n = end + 1
+							sb.WriteRune(util.ToValidRune(rune(v)))
+							i = end
+							continue
+						}
+					}
+				}
+			} else {
+				start := next
+				end, ok := util.ReadWhile(raw, [2]int{start, limit}, util.IsAlphaNumeric)
+				if ok && end < limit && raw[end] == ';' {
+					if entity, ok := util.LookUpHTML5EntityByName(string(raw[start:end])); ok {
+						sb.Write(raw[n:pos])
+						n = end + 1
+						sb.Write(entity.Characters)
+						i = end
+						continue
+					}
+				}
+			}
+		}
+		if c == '\\' {
+			escaped = true
+		}
+	}
+	sb.Write(raw[n:])
+	return sb.String()
 }

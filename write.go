@@ -491,11 +491,17 @@ func linkDestination(url string) string {
 func needsAngleBrackets(url string) bool {
 	for _, r := range url {
 		switch r {
-		case ' ', '\t', '\n', '(', ')', '<', '>':
+		// A backslash anywhere — not just trailing — needs the bracket form:
+		// the bare form's own destination scanner (goldmark's
+		// parseLinkDestination) treats ANY "\" + ASCII-punct pair as an
+		// escape sequence too, so a literal backslash followed by
+		// punctuation elsewhere in the URL gets silently stripped by the
+		// renderer's resolve step on re-parse just the same as a trailing one.
+		case ' ', '\t', '\n', '(', ')', '<', '>', '\\':
 			return true
 		}
 	}
-	return strings.HasSuffix(url, "\\")
+	return false
 }
 
 // escapeText backslash-escapes the ASCII punctuation that would otherwise be
@@ -516,10 +522,16 @@ func escapeText(s string) string {
 			// fix renderTableCell already applies for cells.
 			sb.WriteByte(' ')
 			continue
-		case '\\', '`', '*', '_', '[', ']', '<', '~', '!':
+		case '\\', '`', '*', '_', '[', ']', '<', '~', '!', '&':
 			// '!' needs escaping too: a literal "!" immediately followed by
 			// a Link/CrossRef this writer renders as "[text](url)" would
 			// otherwise re-parse as an image marker on the next Parse.
+			// '&' likewise: richdoc.Text.Value holds the DECODED value (a
+			// literal "&ouml;" from a source entity reference decodes to
+			// "&ouml;" as plain text, not "ö" — see decodeText), so a
+			// literal '&' immediately followed by a run that happens to
+			// look like a valid entity/numeric reference re-resolves into
+			// that reference's character on the next Parse if written bare.
 			sb.WriteByte('\\')
 		}
 		sb.WriteRune(r)

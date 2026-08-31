@@ -179,6 +179,47 @@ func TestParseNodes(t *testing.T) {
 			}}},
 		},
 		{
+			"numeric-hex-reference-decoded",
+			"&#x41; and &#X42;\n",
+			[]richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{
+				richdoc.Text{Value: "A and B"},
+			}}},
+		},
+		{
+			// decodeText ports goldmark's own single left-to-right scan
+			// (see its doc comment): a backslash-escaped "&" must never
+			// let the entity-name scan that follows it fire at all — real
+			// goldmark's own escape check happens before its entity check
+			// at each position, so this decodes to literal "&ouml;", not
+			// the resolved "ö". A three-independent-passes decoder gets
+			// this wrong (verified against the CommonMark spec corpus).
+			"backslash-escaped-ampersand-not-an-entity",
+			"\\&ouml; not a character entity\n",
+			[]richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{
+				richdoc.Text{Value: "&ouml; not a character entity"},
+			}}},
+		},
+		{
+			// A backslash before a non-punctuation character isn't a valid
+			// escape at all (CommonMark only allows escaping ASCII
+			// punctuation) and stays literal, both characters.
+			"backslash-before-non-punctuation-stays-literal",
+			"\\a and \\5\n",
+			[]richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{
+				richdoc.Text{Value: `\a and \5`},
+			}}},
+		},
+		{
+			// A literal NUL byte in the source is replaced with U+FFFD,
+			// matching goldmark's own html.defaultWriter.Write (which this
+			// function ports) rather than passing it through raw.
+			"nul-byte-replaced",
+			"a\x00b\n",
+			[]richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{
+				richdoc.Text{Value: "a\ufffdb"},
+			}}},
+		},
+		{
 			"blockquote",
 			"> q\n",
 			[]richdoc.Block{richdoc.BlockQuote{Blocks: []richdoc.Block{
@@ -587,6 +628,14 @@ func TestWriteSyntax(t *testing.T) {
 			"bang-before-link",
 			richdoc.New().P(richdoc.Txt("!"), richdoc.Href("u", "", richdoc.Txt("t"))).Doc(),
 			`\![t](u)` + "\n", false,
+		},
+		{
+			// A literal "&" that decodeText produced from a genuine source
+			// entity reference must round-trip as literal text, not
+			// re-resolve into that entity's character on the next Parse.
+			"ampersand-before-entity-like-text-escaped",
+			richdoc.New().P(richdoc.Txt("&ouml; not an entity")).Doc(),
+			`\&ouml; not an entity` + "\n", false,
 		},
 		{
 			// A link destination containing a space or parenthesis can't be

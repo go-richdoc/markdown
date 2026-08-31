@@ -45,16 +45,22 @@ tree, up to harmless normalisation:
 - setext headings rewritten as ATX (`#`);
 - CommonMark autolinks (`<http://x>`) rewritten as inline links;
 - character references and backslash escapes decoded into literal text on
-  parse, and re-escaped on write;
+  parse (as goldmark's own HTML renderer would resolve them, in the same
+  single left-to-right scan — a backslash-escaped `&` never lets the entity
+  reference that follows it resolve), and re-escaped on write, including a
+  literal `&` immediately before what would otherwise look like a genuine
+  entity or numeric reference;
 - a soft line break inside a block flattened to a single space on write — it
   survives `Parse` as a literal newline in `Text.Value`, but writing it
   through unchanged would corrupt the block it lands in: an ATX heading is a
   single physical line, and a paragraph line ending right before a `---`/`===`
   line re-parses as an accidental Setext heading. Flattening it matches the
   soft break's own HTML rendering (whitespace);
-- a link/image destination containing a space, a parenthesis, or a trailing
-  backslash written in the `<...>` form rather than the bare `(url)` form,
-  which can't represent any of those safely;
+- a link/image destination containing a space, a parenthesis, or a backslash
+  anywhere in it written in the `<...>` form rather than the bare `(url)`
+  form, which can't represent any of those safely (a bare destination's own
+  scanner treats any `\` + punctuation pair as an escape too, not just one
+  right before the closing paren);
 - a code span whose content starts and ends with a space padded with one
   extra space on each side — the content already reflects CommonMark's own
   single-space padding strip, so writing it back with a bare fence would
