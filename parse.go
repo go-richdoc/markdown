@@ -131,10 +131,11 @@ func (c *converter) convertBlock(n gast.Node) richdoc.Block {
 // convertList maps a goldmark list, preserving ordered/tight state and the
 // starting number of ordered lists.
 func (c *converter) convertList(n *gast.List) richdoc.List {
+	// n.Start is 0 for an unordered list (meaningless there, and Write never
+	// reads it unless Ordered is true) and otherwise CommonMark's own
+	// ordinal, which is always >= 0 — "0. ok" is a valid ordered list
+	// starting at 0, so it must not be clamped up to 1.
 	l := richdoc.List{Ordered: n.IsOrdered(), Start: n.Start, Tight: n.IsTight}
-	if l.Start < 1 {
-		l.Start = 1
-	}
 	for ch := n.FirstChild(); ch != nil; ch = ch.NextSibling() {
 		if item, ok := ch.(*gast.ListItem); ok {
 			l.Items = append(l.Items, richdoc.ListItem{Blocks: c.convertFlow(item)})

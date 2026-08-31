@@ -123,6 +123,16 @@ func TestParseNodes(t *testing.T) {
 			}}},
 		},
 		{
+			// goldmark's List.Start is 0 for an unordered list (meaningless)
+			// but a genuine, valid CommonMark ordinal for an ordered one —
+			// "0. ok" must not be clamped up to Start: 1.
+			"ordered-start-zero",
+			"0. ok\n",
+			[]richdoc.Block{richdoc.List{Ordered: true, Start: 0, Tight: true, Items: []richdoc.ListItem{
+				{Blocks: []richdoc.Block{richdoc.Paragraph{Inlines: []richdoc.Inline{richdoc.Text{Value: "ok"}}}}},
+			}}},
+		},
+		{
 			"raw-html-block",
 			"<div>x</div>\n",
 			[]richdoc.Block{richdoc.RawBlock{Format: "html", Text: "<div>x</div>\n"}},
@@ -543,6 +553,48 @@ func TestWriteSyntax(t *testing.T) {
 			"link-title-with-quote",
 			richdoc.New().P(richdoc.Href("u", `say "hi"`, richdoc.Txt("t"))).Doc(),
 			`[t](u "say \"hi\"")` + "\n", false,
+		},
+		{
+			// Code.Value already reflects CommonMark's own single-space
+			// padding strip (goldmark's parser trims exactly one leading and
+			// one trailing space/newline whenever both are present and the
+			// content isn't blank). Writing it back with a bare fence would
+			// have it stripped a SECOND time on re-parse; the extra padding
+			// survives exactly one such strip and reproduces the value.
+			"code-span-with-space-padding",
+			richdoc.New().P(richdoc.Mono(" `` ")).Doc(),
+			"```  ``  ```\n", false,
+		},
+		{
+			// All-blank content is never affected by CommonMark's padding
+			// strip (goldmark's own parser guards the whole rule behind
+			// "not entirely blank"), so it needs no extra padding either.
+			"code-span-all-blank",
+			richdoc.New().P(richdoc.Mono("  ")).Doc(),
+			"`  `\n", false,
+		},
+		{
+			"code-span-empty",
+			richdoc.New().P(richdoc.Mono("")).Doc(),
+			"``\n", false,
+		},
+		{
+			// Nested single emphasis using the same "*" marker this writer
+			// always prefers would merge into "**" (strong) at the shared
+			// boundary; the inner emphasis must fall back to "_".
+			"nested-emphasis-same-marker",
+			richdoc.New().P(richdoc.Italic(richdoc.Italic(richdoc.Txt("foo")))).Doc(),
+			"_*foo*_\n", false,
+		},
+		{
+			// Emphasis wrapping Strong is the opposite case: "*" next to a
+			// leading "**" forms "***", CommonMark's own idiom for
+			// strong-wrapping-emphasis, and must NOT fall back to "_" —
+			// unlike the same-length collision above, the run lengths here
+			// differ (1 vs. 2) and combine correctly on their own.
+			"emphasis-wrapping-strong",
+			richdoc.New().P(richdoc.Italic(richdoc.Bold(richdoc.Txt("bar")))).Doc(),
+			"***bar***\n", false,
 		},
 	}
 	for _, tc := range cases {
