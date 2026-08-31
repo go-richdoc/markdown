@@ -355,6 +355,17 @@ func escapeText(s string) string {
 	sb.Grow(len(s))
 	for _, r := range s {
 		switch r {
+		case '\n':
+			// A soft line break survives in richdoc.Text.Value as a literal
+			// newline (Parse appends it verbatim). Writing it through
+			// unchanged corrupts whatever block it lands in — an ATX heading
+			// is one physical line, and a paragraph line ending right before
+			// it re-parses as an accidental Setext heading whenever what
+			// follows is a bare "---"/"===" line. Flattening to a space
+			// matches the soft break's own HTML rendering and is the same
+			// fix renderTableCell already applies for cells.
+			sb.WriteByte(' ')
+			continue
 		case '\\', '`', '*', '_', '[', ']', '<', '~':
 			sb.WriteByte('\\')
 		}

@@ -45,7 +45,13 @@ tree, up to harmless normalisation:
 - setext headings rewritten as ATX (`#`);
 - CommonMark autolinks (`<http://x>`) rewritten as inline links;
 - character references and backslash escapes decoded into literal text on
-  parse, and re-escaped on write.
+  parse, and re-escaped on write;
+- a soft line break inside a block flattened to a single space on write — it
+  survives `Parse` as a literal newline in `Text.Value`, but writing it
+  through unchanged would corrupt the block it lands in: an ATX heading is a
+  single physical line, and a paragraph line ending right before a `---`/`===`
+  line re-parses as an accidental Setext heading. Flattening it matches the
+  soft break's own HTML rendering (whitespace).
 
 ## Node mapping
 
