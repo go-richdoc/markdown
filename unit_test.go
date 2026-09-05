@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/go-richdoc/richdoc"
-	gast "github.com/yuin/goldmark/ast"
-	extast "github.com/yuin/goldmark/extension/ast"
+	gast "github.com/yuin/goldmark/v2/ast"
+	extast "github.com/yuin/goldmark/v2/extension/ast"
 )
 
 // TestParseNodes checks that Parse builds the expected richdoc nodes for each
