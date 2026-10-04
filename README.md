@@ -147,6 +147,7 @@ the model.
 | `BlockQuote`        | `>`-prefixed lines                                         |
 | `List`              | `-` / `N.` items, tight or loose                          |
 | `Table`             | GFM pipe table with an alignment delimiter row            |
+| `Table.Caption`     | an emphasised paragraph AFTER the table (see below)      |
 | `ThematicBreak`     | `---`                                                      |
 | `MathBlock`         | `$$` … `$$`                                                |
 | `RawBlock`          | verbatim text (`html` and any other format)               |
@@ -186,6 +187,25 @@ re-parsed identically (for example `[x](<#a b>)`, whose fragment contains a
 space). The mapping is intentionally conservative so it never turns an ordinary
 link into a cross-reference by accident, and it round-trips: a mapped
 `CrossRef` writes back as `[text](#target)` and re-parses to the same node.
+
+## What a pipe table cannot hold (richdoc v0.5.0)
+
+Two fields arrived in the model that GFM has no syntax for, and this converter's
+answer to each is written down rather than left to be discovered.
+
+**`Table.Caption`** is written as an emphasised paragraph after the table. GFM has
+no caption, so the choice was between dropping the author's words and putting them
+where a reader sees them. It does **not** come back as a caption on the next
+`Parse` — there is nothing in GFM to mark one with — so it is prose from then on.
+No table this package parses ever has a caption, so the round trip is unaffected: a
+caption can only arrive from another converter, where emitting it is a gain over
+losing it.
+
+**`Cell.Blocks`** has nowhere to go: the GFM table extension parses a cell's
+content as inlines. richdoc's contract is that a producer which fills `Blocks` also
+fills `Inlines` with the flattened view, and that is what this writer reads, so a
+cell holding a list in reST or LaTeX keeps its words here and loses its structure.
+That is the format's limit, not a loss this package introduces.
 
 ## License
 
