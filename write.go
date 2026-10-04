@@ -249,7 +249,21 @@ func (w *writer) renderTable(t richdoc.Table) string {
 	for _, row := range t.Rows {
 		rows = append(rows, w.renderTableRow(row, cols))
 	}
-	return strings.Join(rows, "\n")
+	out := strings.Join(rows, "\n")
+	// A CAPTION (richdoc v0.5.0) has no spelling in a GFM pipe table, so it is
+	// written as an emphasised paragraph after the table: that is what a reader
+	// sees in every Markdown renderer, and the alternative is dropping the
+	// author's own words. It does not come back as a caption on the next Parse --
+	// GFM gives this writer no way to mark one -- so it is prose from then on,
+	// which is the honest degradation and is stated in the README.
+	//
+	// No table this package PARSES ever has one, so the round trip is unaffected:
+	// a caption can only arrive from another converter, where emitting it is a
+	// gain over losing it.
+	if len(t.Caption) > 0 {
+		out += "\n\n*" + w.renderInlines(t.Caption) + "*"
+	}
+	return out
 }
 
 // renderTableRow renders one row padded to cols cells.
