@@ -207,6 +207,16 @@ fills `Inlines` with the flattened view, and that is what this writer reads, so 
 cell holding a list in reST or LaTeX keeps its words here and loses its structure.
 That is the format's limit, not a loss this package introduces.
 
+## Toolchain
+
+Requires **Go 1.27.1**, which is the version the CI workflow pins. The two were out of
+step — the module asked for 1.26.4 while CI already ran 1.27.1 — and that difference
+decides two things a reader of this repository should not have to guess: 1.27 counts
+statements more finely, so a coverage figure from an older toolchain is an upper bound
+rather than a measurement, and its `gofmt` reindents a composite literal inside a
+multi-value return, which an older local `gofmt` reports as clean. Both were checked
+with 1.27.1 here: coverage is unchanged at 100%, and the tree needs no reformatting.
+
 ## License
 
 BSD-3-Clause. See [LICENSE](LICENSE).
