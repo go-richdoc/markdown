@@ -39,10 +39,22 @@ var md = goldmark.New(
 
 // Parse converts CommonMark source (with GFM tables and strikethrough, PHP
 // Markdown Extra footnotes and explicit heading anchors) into a
-// [richdoc.Document]. goldmark's parser never reports an error, so the returned
-// error is always nil; it is kept in the signature for symmetry with [Write]
-// and for forward compatibility.
+// [richdoc.Document], with the default [Limits].
+//
+// goldmark's parser never reports an error of its own. The error this returns
+// is therefore the limits': since v0.11.0 a document whose blocks nest past
+// [Limits.MaxBlockNesting] is refused BEFORE goldmark is handed it, because
+// the cost of that nesting is quadratic and 92% of it is the engine's at the
+// depth where it starts to matter. See [Limits].
 func Parse(src []byte) (*richdoc.Document, error) {
+	return ParseWithLimits(src, Limits{})
+}
+
+// ParseWithLimits is [Parse] with the bounds stated. See [Limits].
+func ParseWithLimits(src []byte, lim Limits) (*richdoc.Document, error) {
+	if err := checkNesting(src, lim.orDefaults().MaxBlockNesting); err != nil {
+		return nil, err
+	}
 	root := md.Parser().Parse(text.NewReader(src))
 	c := &converter{src: src, notes: collectFootnotes(root)}
 	return &richdoc.Document{Blocks: c.convertFlow(root)}, nil
@@ -53,6 +65,10 @@ func Parse(src []byte) (*richdoc.Document, error) {
 type converter struct {
 	src   []byte
 	notes map[int]*extast.Footnote
+	// expanding holds the footnote indices currently being inlined, so that a
+	// note reaching itself degrades instead of recursing forever. See the
+	// FootnoteLink case in convertInline.
+	expanding map[int]bool
 }
 
 // collectFootnotes indexes the footnote definitions goldmark gathers into the
@@ -290,7 +306,41 @@ func (c *converter) convertInline(n gast.Node) []richdoc.Inline {
 	case *extast.FootnoteLink:
 		// goldmark only emits a FootnoteLink when a matching definition exists,
 		// so the lookup always resolves; the body is inlined here.
-		return []richdoc.Inline{richdoc.Footnote{Blocks: c.convertFlow(c.notes[i.Index])}}
+		//
+		// ⛔ A note whose own body cites it is a CYCLE, and inlining it was a
+		// CRASH — "fatal error: stack overflow", which Go cannot recover from,
+		// so no caller could defend against it. Fifty-five bytes do it:
+		//
+		//	a footnote[^1]
+		//
+		//	[^1]: the note[^1]
+		//
+		// The guard is the set of notes currently being inlined, and a
+		// reference back into one degrades to the marker as plain text —
+		// which is what an unresolvable reference already looks like to every
+		// consumer.
+		//
+		// ⛔ This is the SAME SHAPE go-richdoc/rst was fixed for two rounds
+		// earlier (a substitution, and a footnote, that reach themselves), and
+		// the audit that followed missed this one: it searched for a
+		// `map[string]` of definitions, where this map is keyed by goldmark's
+		// int Index. Searching for the shape of the code already seen, rather
+		// than for the BEHAVIOUR — a definition inlined by reference — is how
+		// the second instance survived the sweep that was looking for it.
+		// FuzzParse found it in two minutes.
+		if c.expanding[i.Index] {
+			// The author's own marker, "[^ref]": goldmark's Footnote carries
+			// the label as Ref, and that is exactly what an unresolvable
+			// reference looks like in Markdown.
+			return []richdoc.Inline{richdoc.Text{Value: "[^" + string(c.notes[i.Index].Ref) + "]"}}
+		}
+		if c.expanding == nil {
+			c.expanding = map[int]bool{}
+		}
+		c.expanding[i.Index] = true
+		out := []richdoc.Inline{richdoc.Footnote{Blocks: c.convertFlow(c.notes[i.Index])}}
+		delete(c.expanding, i.Index)
+		return out
 	}
 	return nil
 }
