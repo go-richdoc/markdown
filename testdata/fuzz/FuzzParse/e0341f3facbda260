@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("~~struck~~ and a footnote[^1]\n\n[^1]: thete[^1]\n\n note\n")

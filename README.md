@@ -34,6 +34,111 @@ doc, err := markdown.Parse([]byte("# Title\n\nHello **world**.\n"))
 out, err := markdown.Write(doc)
 ```
 
+## ⛔ The nesting bound, and why the cost of nesting is not the cost of bytes
+
+`Parse` takes the default `Limits`; `ParseWithLimits` states them (v0.11.0+).
+One field, `MaxBlockNesting`, default **256**, zero meaning the default and a
+negative value meaning no limit — the convention `go-richdoc/rst`'s
+`LineLengthLimit` and `go-richdoc/latex`'s `MaxDepth` already use.
+
+It exists because block nesting is **quadratic**, and cheap to write.
+`BenchmarkQuoteNestingDeep` (2026-10-31, Apple M4 Max, Go 1.27.2):
+
+| block quotes | source | parse |
+|---|---|---|
+| 10 000 deep | 20 KB | 54.7 ms |
+| 50 000 deep | 100 KB | 1.35 s |
+| 100 000 deep | 200 KB | 5.97 s |
+| 200 000 deep | 400 KB | **21.9 s** |
+
+Doubling the depth multiplies the time by about 3.7. A block quote costs the
+author **two bytes a level**, so 400 KB of source occupies a core for 22
+seconds and a megabyte for minutes.
+
+Every benchmark here carries an **equal-size flat control**, because without
+one the numbers only say "a big document is slow", which is not a finding:
+
+| | nested | the same bytes, flat |
+|---|---|---|
+| list, 100 levels, 10.3 KB | 1.40 ms | 288 µs → **4.9×** |
+| list, 300 levels, 90.9 KB | 30.9 ms | 1.05 ms → **29.5×** |
+
+The ratio itself grows with depth.
+
+**The guard runs before goldmark, because the cost is goldmark's.**
+`BenchmarkGoldmarkOnly` times the engine alone on the same documents: 22% of
+the total at depth 100, 75% at 1000, **92% at 5000**. A counter in this
+package's own recursion would never reach it, so the check is a line scan of
+its own — the placement `go-richdoc/fb2` uses for the same reason.
+
+goldmark has no nesting bound of its own (a search of its whole source for one
+finds nothing), and CommonMark is content for an implementation to have one:
+*"Implementations may impose limits on parentheses nesting to avoid
+performance issues, but at least three levels of nesting should be
+supported."*
+
+**The default is measured, not chosen.** `mddepthprobe`, beside the Markdown
+corpus, read the **14 651 real `.md` files** on the machine this was written
+on: the deepest reaches **five** leading `>` markers, and the widest
+indentation is **73 columns** — about 36 levels. 256 clears the widest real
+document seven times over, and the controls in `limits_test.go` are those real
+shapes, which must still parse.
+
+## ⛔ Fifty-five bytes were a denial of service
+
+```markdown
+a footnote[^1]
+
+[^1]: the note[^1]
+```
+
+A footnote's body is inlined at its reference, so resolving one is recursive. A
+note whose body cites **itself** recursed forever and Go answered `fatal error:
+stack overflow` — which is not a panic. No `recover()` catches it, so a service
+converting a document it did not write could be killed by fifty-five bytes and
+could not defend itself. A mutual pair and a ring of any length do it too.
+
+The guard is the set of notes being inlined **on the current path**, so the
+same note referenced twice still carries its body twice — that is the control,
+and a guard that *remembered* instead of tracking would quietly empty the
+second reference.
+
+**It is the same shape `go-richdoc/rst` was fixed for two rounds earlier, and
+the audit that followed missed this one.** That audit searched the family for a
+`map[string]` of definitions; this map is keyed by goldmark's `int` index.
+Searching for the shape of the code already seen, instead of for the behaviour
+— *a definition inlined by reference* — is how the second instance survived the
+sweep that was looking for it. `FuzzParse` found it in two minutes, and the
+input is committed under `testdata/fuzz/FuzzParse`.
+
+### ⛔ What the fuzzer found that no unit test would have
+
+The first version of the scan read a line's prefix for indentation and `>`
+markers and stopped at the first other character. `FuzzParse` produced this in
+six seconds:
+
+```markdown
+*   *   *   *   *   *   ... x
+```
+
+In CommonMark a `*` and three spaces open an item whose content begins four
+columns in, so that single line is nested lists at **four bytes a level** — and
+the scan read it as depth **zero**. Measured
+(`BenchmarkOneLineListNesting`), 20 KB of it costs 74.6 ms, quadratically:
+worse per byte than the block quotes the guard was written for.
+
+It was caught by the one property that does not trust the guard — *the depth of
+the tree that came back* — and the failing input is committed under
+`testdata/fuzz/FuzzParse`. The scan now walks the whole block prefix: quote
+markers, bullet and ordered list markers, and indentation, in any order.
+
+Fenced code is tracked, and that is not a refinement: inside a fence a leading
+`>` is a transcript and a deep indent is a code sample, so a README quoting a
+shell session would otherwise be refused **for its own text**. The fence rules
+are the spec's, quoted in the tests — a closer "may be preceded by up to three
+spaces of indentation, and may be followed only by spaces or tabs", "must use
+the same character as the opening", and "must be at least as long".
+
 ## Round-trip
 
 The pair aims for a stable round-trip: `Write(Parse(src))` is semantically
