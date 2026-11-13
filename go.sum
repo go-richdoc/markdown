@@ -1,4 +1,4 @@
-github.com/go-richdoc/richdoc v0.9.0 h1:t3XcDNQN+e2KrEERu6qctlYahSDZkbEGgGDeZxta3iA=
-github.com/go-richdoc/richdoc v0.9.0/go.mod h1:xsldfEfOJy3uWrzpXuz57+w915kDv5B0rPGKiqAzHQs=
+github.com/go-richdoc/richdoc v0.10.0 h1:+BsIDF1iX1QNzk96uMX6VbsVmiGwXoabFdBkI+01UBQ=
+github.com/go-richdoc/richdoc v0.10.0/go.mod h1:zZIyjS9RnUk0qC9kz1cTZsQHdbBZlKSMXWsTZOEeowc=
 github.com/yuin/goldmark v1.8.7 h1:XT/tNqCIbabh0ln675w4x3dv04kQBKi8NwYqi9IJaxI=
 github.com/yuin/goldmark v1.8.7/go.mod h1:ip/1k0VRfGynBgxOz0yCqHrbZXhcjxyuS66Brc7iBKg=
